@@ -1,11 +1,11 @@
 #!/bin/bash -e
 
-# github.com/jawj/IKEv2-setup
+# github.com/rlshukhov/IKEv2-setup (forked from github.com/jawj/IKEv2-setup)
 # Copyright (c) 2015 – 2021 George MacKerron
 # Released under the MIT licence: http://opensource.org/licenses/mit-license
 
 echo
-echo "=== https://github.com/jawj/IKEv2-setup ==="
+echo "=== https://github.com/rlshukhov/IKEv2-setup ==="
 echo
 
 
@@ -32,7 +32,22 @@ add-apt-repository restricted
 add-apt-repository multiverse
 
 apt-get -o Acquire::ForceIPv4=true install -y moreutils dnsutils
+apt-get -o Acquire::ForceIPv4=true build-dep -y strongswan
+apt-get -o Acquire::ForceIPv4=true install -y libgmp3-dev openssl libssl-dev
 
+echo
+echo "--- Compiling and installing strongswan with userspace IPsec ---"
+echo
+
+wget http://download.strongswan.org/strongswan.tar.gz
+tar zxvf strongswan*
+rm ./strongswan.tar.gz
+cd strongswan*
+./configure --sysconfdir=/etc --disable-sql --disable-mysql --disable-ldap --enable-dhcp --enable-eap-identity --enable-eap-mschapv2 --enable-md4 --enable-xauth-eap --enable-eap-peap --enable-eap-md5 --enable-openssl --enable-shared --enable-unity --enable-eap-tls   --enable-eap-ttls --enable-eap-tnc --enable-eap-dynamic --enable-addrblock --enable-eap-radius --enable-radattr --enable-nat-transport --enable-cisco-quirks --enable-kernel-netlink --enable-kernel-libipsec
+
+make && make install
+ln /usr/local/sbin/ipsec /usr/sbin/ipsec
+cd ~
 
 echo
 echo "--- Configuration: VPN settings ---"
@@ -133,7 +148,7 @@ apt autoremove -y
 debconf-set-selections <<< "postfix postfix/mailname string ${VPNHOST}"
 debconf-set-selections <<< "postfix postfix/main_mailer_type string 'Internet Site'"
 
-apt-get -o Acquire::ForceIPv4=true install -y language-pack-en strongswan libstrongswan-standard-plugins strongswan-libcharon libcharon-standard-plugins libcharon-extra-plugins  iptables-persistent postfix mutt unattended-upgrades certbot uuid-runtime
+apt-get -o Acquire::ForceIPv4=true install -y language-pack-en iptables-persistent postfix mutt unattended-upgrades certbot uuid-runtime
 
 
 echo
@@ -141,59 +156,13 @@ echo "--- Configuring firewall ---"
 echo
 
 # firewall
-# https://www.strongswan.org/docs/LinuxKongress2009-strongswan.pdf
-# https://wiki.strongswan.org/projects/strongswan/wiki/ForwardingAndSplitTunneling
-# https://www.zeitgeist.se/2013/11/26/mtu-woes-in-ipsec-tunnels-how-to-fix/
+# https://sites.google.com/a/pickdreams.org/snail-library/Home/openvpn-shang-deipsec-vpn
 
-iptables -P INPUT   ACCEPT
-iptables -P FORWARD ACCEPT
-iptables -P OUTPUT  ACCEPT
-
-iptables -F
-iptables -t nat -F
-iptables -t mangle -F
-
-# INPUT
-
-# accept anything already accepted
-iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-
-# accept anything on the loopback interface
-iptables -A INPUT -i lo -j ACCEPT
-
-# drop invalid packets
-iptables -A INPUT -m state --state INVALID -j DROP
-
-# rate-limit repeated new requests from same IP to any ports
-iptables -I INPUT -i "${ETH0ORSIMILAR}" -m state --state NEW -m recent --set
-iptables -I INPUT -i "${ETH0ORSIMILAR}" -m state --state NEW -m recent --update --seconds 300 --hitcount 60 -j DROP
-
-# accept (non-standard) SSH
-iptables -A INPUT -p tcp --dport "${SSHPORT}" -j ACCEPT
-
-
-# VPN
-
-# accept IPSec/NAT-T for VPN (ESP not needed with forceencaps, as ESP goes inside UDP)
-iptables -A INPUT -p udp --dport  500 -j ACCEPT
+iptables -A INPUT -p esp -j ACCEPT
+iptables -A INPUT -p udp --dport 500 -j ACCEPT
 iptables -A INPUT -p udp --dport 4500 -j ACCEPT
 
-# forward VPN traffic anywhere
-iptables -A FORWARD --match policy --pol ipsec --dir in  --proto esp -s "${VPNIPPOOL}" -j ACCEPT
-iptables -A FORWARD --match policy --pol ipsec --dir out --proto esp -d "${VPNIPPOOL}" -j ACCEPT
-
-# reduce MTU/MSS values for dumb VPN clients
-iptables -t mangle -A FORWARD --match policy --pol ipsec --dir in -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -p tcp -m tcp --tcp-flags SYN,RST SYN -m tcpmss --mss 1361:1536 -j TCPMSS --set-mss 1360
-
-# masquerade VPN traffic over eth0 etc.
-iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -m policy --pol ipsec --dir out -j ACCEPT  # exempt IPsec traffic from masquerading
-iptables -t nat -A POSTROUTING -s "${VPNIPPOOL}" -o "${ETH0ORSIMILAR}" -j MASQUERADE
-
-
-# fall through to drop any other input and forward traffic
-
-iptables -A INPUT   -j DROP
-iptables -A FORWARD -j DROP
+iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o venet0 -j MASQUERADE
 
 iptables -L
 
