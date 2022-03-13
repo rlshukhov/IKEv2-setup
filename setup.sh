@@ -48,6 +48,7 @@ cd strongswan*
 make && make install
 ln /usr/local/sbin/ipsec /usr/sbin/ipsec
 cd ~
+systemctl enable strongswan-starter.service
 
 echo
 echo "--- Configuration: VPN settings ---"
